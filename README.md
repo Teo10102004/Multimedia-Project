@@ -1,2 +1,2 @@
-# Multimedia-Project
-Interactive Maze Game
+# Interactive Maze Game
+
