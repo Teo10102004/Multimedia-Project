@@ -1,0 +1,72 @@
+body{ /*refers to the whole page*/
+    font-family: fantasy, papyrus;
+   
+    text-align: center;
+    margin: 0;
+    padding: 20px;
+    background-image:url(Images/abstract-splashed-watercolor-textured.avif);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+h1{
+    color: white;
+}
+
+p{
+    color: white;
+}
+
+@keyframes glow {
+    0% {
+        box-shadow: 0 0 10px cyan, 0 0 20px blue, 0 0 30px blueviolet, cyan 0 0 40px, blue 0 0 60px, blueviolet 0 0 80px;
+    }
+    50% {
+        box-shadow: 0 0 30px cyan, 0 0 40px blue, 0 0 60px blueviolet, cyan 0 0 80px, blue 0 0 100px, blueviolet 0 0 120px;
+    }
+    100% {
+        box-shadow: 0 0 10px cyan, 0 0 20px blue, 0 0 30px blueviolet, cyan 0 0 40px, blue 0 0 60px, blueviolet 0 0 80px;
+    }
+}
+
+.maze { /*refers to the maze container*/
+    display: grid; /*uses grid layout because maze is made of rows and columns, it will arrange the cells in rows from left to right*/
+    grid-template-columns: repeat(10, 60px); /*10 columns, each 50px wide*/
+    grid-template-rows: repeat(10, 60px); /*10 rows, each 50px high*/
+    /*gap: 2px; /*space between cells*/
+    justify-content: center; /*centers the maze horizontally*/
+    border: 10px #00ffff solid; /*black border around the maze*/
+    border-radius: 10px; /*rounded corners for the maze border*/
+    animation: glow 2.5s infinite; /*applies the glow animation*/
+    width: fit-content; /*maze width fits its content*/
+    margin: 0 auto; /*centers the maze on the page*/
+}
+
+.cell { /*refers to each cell in the maze*/
+    width: 60px; /*width of each cell*/
+    height: 60px; /*height of each cell*/
+}
+
+/*specific styles for different cell types*/
+.start {
+    background-image: url(Images/Start1.png);
+    background-size: cover; /*start image for start*/
+}
+
+.finish {
+    background-image: url(Images/Finish.png);
+    background-size: cover; /*finish image for finish*/
+}
+
+.path {
+    background-image: url(Images/blueStarFilling3.jpg);
+    background-size: cover; /*stars for path*/
+}
+
+.wall {
+   background-image: url(Images/blueAsteroidwithStars.png);
+   background-size: cover; /*asteroids for wall*/
+   box-shadow: inset 0 0 10px rgba(0,0,0, 0.7); /*adds depth to wall cells*/
+
+}
