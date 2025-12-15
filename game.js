@@ -1,60 +1,388 @@
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
-// let player = {
-//     x:15,
-//     y:15,
-//     size: 30
-// };
+// ============ TEXTURE SYSTEM ============
+const textures = {
+    wall: new Image(),
+    path: new Image(),
+    start: new Image(),
+    finish: new Image()
+};
 
-// function draw(){
-//     ctx.clearRect(0, 0, canvas.width, canvas.height);
+textures.wall.src = 'Images/blueAsteroidwithStars.png';
+textures.path.src = 'Images/blueStarFilling3.jpg';
+textures.start.src = 'Images/Start1.png';
+textures.finish.src = 'Images/Finish.png';
 
-//     ctx.fillStyle = "black"; //fill color for backround
-//     ctx.fillRect(0, 0, canvas.width, canvas.height); //background
+let texturesLoaded = 0;
+const totalTextures = 4;
 
-//     ctx.fillStyle = "cyan";
-//     ctx.fillRect(player.x, player.y, player.size, player.size); //player
-// }
+function onTextureLoad() {
+    texturesLoaded++;
+    if (texturesLoaded === totalTextures) {
+        draw(); // Redraw once all textures are loaded
+    }
+}
 
-// draw();
+textures.wall.onload = onTextureLoad;
+textures.path.onload = onTextureLoad;
+textures.start.onload = onTextureLoad;
+textures.finish.onload = onTextureLoad;
 
-// document.addEventListener("keydown", movePlayer);
+// ============ AUDIO SYSTEM ============
+class AudioManager {
+    constructor() {
+        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
 
-//     function movePlayer(event)
-//     {
-//         const speed = 20;
-//         if(event.key === "ArrowUp") player.y -= speed;
-//         if(event.key === "ArrowDown") player.y += speed;
-//         if(event.key === "ArrowLeft") player.x -= speed;
-//         if(event.key === "ArrowRight") player.x += speed;
-    
-//     draw();
-//     }
+    // Ensure AudioContext is running (issue found: may be suspended after alerts/popups)
+    ensureResumed() {
+        if (this.ctx.state === 'suspended') {
+            this.ctx.resume();
+        }
+    }
 
-// The above funtionality is pixel based but it will be harder to implement collisions and levels this way
-// Instead we will use a grid based system
+    // Play a simple tone with given frequency and duration
+    playTone(frequency, duration, type = 'sine', volume = 0.3) {
+        this.ensureResumed();
 
+        const oscillator = this.ctx.createOscillator();
+        const gainNode = this.ctx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(this.ctx.destination);
+
+        oscillator.type = type;
+        oscillator.frequency.value = frequency;
+        gainNode.gain.value = volume;
+
+        // Fade out to avoid clicks
+        gainNode.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+
+        oscillator.start(this.ctx.currentTime);
+        oscillator.stop(this.ctx.currentTime + duration);
+    }
+
+    playStep() {
+        // Short, soft blip - for movement
+        this.playTone(440, 0.08, 'sine', 0.2);
+    }
+
+    playHitWall() {
+        // Low buzz - for hitting a wall
+        this.playTone(150, 0.15, 'square', 0.25);
+    }
+
+    playWin() {
+        // Victory fanfare - ascending tones
+        this.playTone(523, 0.15, 'sine', 0.3); // C5
+        setTimeout(() => this.playTone(659, 0.15, 'sine', 0.3), 150); // E5
+        setTimeout(() => this.playTone(784, 0.3, 'sine', 0.3), 300);  // G5
+    }
+
+    playObstacleHit() {
+        // Danger sound - descending tones
+        this.playTone(400, 0.1, 'sawtooth', 0.3);
+        setTimeout(() => this.playTone(200, 0.2, 'sawtooth', 0.3), 100);
+    }
+
+    playLevelComplete() {
+        // Short celebration
+        this.playTone(523, 0.1, 'sine', 0.25);
+        setTimeout(() => this.playTone(659, 0.1, 'sine', 0.25), 100);
+        setTimeout(() => this.playTone(784, 0.15, 'sine', 0.25), 200);
+    }
+}
+
+const audio = new AudioManager();
+
+// ============ TIMER SYSTEM ============
+let startTime = Date.now();
+let gameWon = false;
+
+// ============ GAME CONSTANTS ============
 const TILE = 60;
 const ROWS = 10;
 const COLS = 10;
 
-let player = {c:0, r:0, size: TILE *0.6}; //the player needs to be a bit smaller than the tile 
+// ============ LEVEL DEFINITIONS ============
+// Cell codes: 0 = path, 1 = wall, 2 = start, 3 = finish
 
+const mazeL1 = [
+    [2, 0, 1, 0, 0, 0, 1, 0, 1, 0],
+    [0, 1, 1, 0, 1, 0, 1, 0, 1, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 1, 1, 1, 1, 1, 0, 1, 1, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [1, 1, 1, 1, 0, 1, 1, 1, 1, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
+    [0, 1, 0, 0, 0, 1, 1, 0, 0, 3],
+];
+
+const mazeL2 = [
+    [2, 0, 0, 1, 0, 0, 0, 0, 1, 0],
+    [1, 1, 0, 1, 0, 1, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 1, 1, 1, 1, 0, 1, 1, 1, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 1, 1, 1, 1, 1, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 0, 3],
+];
+
+const mazeL3 = [
+    [2, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 1, 0, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 1, 1, 1, 1, 1, 1, 0, 1, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [1, 1, 0, 1, 0, 1, 1, 1, 1, 1],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 1, 1, 1, 0, 0, 0, 1, 1, 3],
+];
+
+const mazeL4 = [
+    [2, 0, 1, 0, 0, 0, 0, 1, 0, 0],
+    [1, 0, 1, 0, 1, 1, 0, 1, 0, 1],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 1, 0, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0, 1, 0, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 0, 3],
+];
+
+const mazeL5 = [
+    [2, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [1, 1, 1, 1, 0, 1, 0, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 1, 1, 0],
+    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 1, 1, 0],
+    [0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 1, 1, 1, 1, 1, 1, 0, 0, 3],
+];
+
+// Level configurations with obstacles
+// Obstacle format: { r, c, direction: 'h'|'v', range, speed (ms) }
+const levels = [
+    {
+        name: "Stage 1 - First Steps",
+        maze: mazeL1,
+        obstacles: []  // No obstacles for tutorial level
+    },
+    {
+        name: "Stage 2 - Space Debris",
+        maze: mazeL2,
+        obstacles: [
+            { r: 2, c: 2, direction: 'h', range: 3, speed: 600 }
+        ]
+    },
+    {
+        name: "Stage 3 - Asteroid Belt",
+        maze: mazeL3,
+        obstacles: [
+            { r: 4, c: 4, direction: 'h', range: 3, speed: 500 },
+            { r: 6, c: 6, direction: 'h', range: 3, speed: 550 }
+        ]
+    },
+    {
+        name: "Stage 4 - Danger Zone",
+        maze: mazeL4,
+        obstacles: [
+            { r: 2, c: 2, direction: 'h', range: 3, speed: 450 },
+            { r: 4, c: 4, direction: 'h', range: 2, speed: 400 },
+            { r: 6, c: 2, direction: 'h', range: 5, speed: 500 }
+        ]
+    },
+    {
+        name: "Stage 5 - Final Frontier",
+        maze: mazeL5,
+        obstacles: [
+            { r: 2, c: 2, direction: 'h', range: 4, speed: 350 },
+            { r: 4, c: 4, direction: 'h', range: 2, speed: 300 },
+            { r: 6, c: 2, direction: 'h', range: 4, speed: 350 },
+            { r: 8, c: 2, direction: 'h', range: 5, speed: 400 }
+        ]
+    }
+];
+
+// ============ OBSTACLE CLASS ============
+class Obstacle {
+    constructor(r, c, direction, range, speed) {
+        this.r = r;
+        this.c = c;
+        this.startR = r;
+        this.startC = c;
+        this.direction = direction;
+        this.range = range;
+        this.speed = speed;
+        this.forward = true;
+        this.moveCount = 0;
+    }
+
+    move(maze) {
+        let nextR = this.r;
+        let nextC = this.c;
+
+        if (this.direction === 'h') {
+            nextC = this.forward ? this.c + 1 : this.c - 1;
+        } else {
+            nextR = this.forward ? this.r + 1 : this.r - 1;
+        }
+
+        // Check range limits
+        const distFromStart = this.direction === 'h'
+            ? Math.abs(nextC - this.startC)
+            : Math.abs(nextR - this.startR);
+
+        // Check if next position is valid (not wall, in bounds, within range)
+        if (nextR >= 0 && nextR < ROWS && nextC >= 0 && nextC < COLS &&
+            maze[nextR][nextC] !== 1 && distFromStart <= this.range) {
+            this.r = nextR;
+            this.c = nextC;
+        } else {
+            // Reverse direction
+            this.forward = !this.forward;
+        }
+    }
+
+    draw() {
+        const x = this.c * TILE;
+        const y = this.r * TILE;
+
+        // Draw obstacle as a red warning symbol
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+        ctx.fillRect(x, y, TILE, TILE);
+
+        // Draw X pattern
+        ctx.strokeStyle = '#ff3333';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(x + 10, y + 10);
+        ctx.lineTo(x + TILE - 10, y + TILE - 10);
+        ctx.moveTo(x + TILE - 10, y + 10);
+        ctx.lineTo(x + 10, y + TILE - 10);
+        ctx.stroke();
+
+        // Draw pulsing circle
+        const pulse = Math.sin(Date.now() / 200) * 5 + 15;
+        ctx.beginPath();
+        ctx.arc(x + TILE / 2, y + TILE / 2, pulse, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ff6666';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+
+    checkCollision(playerR, playerC) {
+        return this.r === playerR && this.c === playerC;
+    }
+}
+
+// ============ GAME STATE ============
+let currentLevel = 0;
+let currentMaze = levels[currentLevel].maze;
+let activeObstacles = [];
+let obstacleIntervals = [];
+
+let player = { c: 0, r: 0, size: TILE * 0.6 };
+
+function findCell(maze, code) {
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            if (maze[r][c] === code) { return { r, c }; }
+        }
+    }
+    return { r: 0, c: 0 };
+}
+
+function initLevel(levelIndex) {
+    // Clear existing obstacle intervals
+    obstacleIntervals.forEach(interval => clearInterval(interval));
+    obstacleIntervals = [];
+
+    currentLevel = levelIndex;
+    currentMaze = levels[currentLevel].maze;
+
+    // Find start and finish positions
+    const startPos = findCell(currentMaze, 2);
+    const finishPos = findCell(currentMaze, 3);
+
+    player.c = startPos.c;
+    player.r = startPos.r;
+
+    gameWon = false;
+    startTime = Date.now();
+
+    // Create obstacles for this level
+    activeObstacles = levels[currentLevel].obstacles.map(obs =>
+        new Obstacle(obs.r, obs.c, obs.direction, obs.range, obs.speed)
+    );
+
+    // Start obstacle movement intervals
+    activeObstacles.forEach((obstacle, index) => {
+        const interval = setInterval(() => {
+            obstacle.move(currentMaze);
+            if (obstacle.checkCollision(player.r, player.c)) {
+                resetPlayer();
+            }
+            draw();
+        }, obstacle.speed);
+        obstacleIntervals.push(interval);
+    });
+
+    // Update page title
+    document.querySelector('h1').textContent = levels[currentLevel].name;
+
+    draw();
+}
+
+function resetPlayer() {
+    const startPos = findCell(currentMaze, 2);
+    player.c = startPos.c;
+    player.r = startPos.r;
+    audio.playObstacleHit();
+}
+
+// ============ DRAWING FUNCTIONS ============
 function clear() {
-    ctx.clearRect(0,0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
 function drawPlayer() {
-    const px = player.c * TILE + (TILE - player.size) / 2;//i don't think I need this anymore
+    const px = player.c * TILE + (TILE - player.size) / 2;
     const py = player.r * TILE + (TILE - player.size) / 2;
 
+    // Draw player as a spaceship shape
     ctx.fillStyle = "cyan";
-    ctx.fillRect(px, py, player.size, player.size);
+    ctx.beginPath();
+    ctx.moveTo(px + player.size / 2, py); // Top point
+    ctx.lineTo(px + player.size, py + player.size); // Bottom right
+    ctx.lineTo(px + player.size / 2, py + player.size * 0.7); // Bottom middle
+    ctx.lineTo(px, py + player.size); // Bottom left
+    ctx.closePath();
+    ctx.fill();
+
+    // Add glow effect
+    ctx.shadowColor = 'cyan';
+    ctx.shadowBlur = 10;
+    ctx.fill();
+    ctx.shadowBlur = 0;
 }
 
 function drawGridLines() {
-    ctx.strokeStyle = "gray";
+    ctx.strokeStyle = "rgba(100, 100, 100, 0.3)";
+    ctx.lineWidth = 1;
 
     for (let r = 0; r <= ROWS; r++) {
         ctx.beginPath();
@@ -63,7 +391,7 @@ function drawGridLines() {
         ctx.stroke();
     }
 
-    for (let c=0; c <= COLS; c++) {
+    for (let c = 0; c <= COLS; c++) {
         ctx.beginPath();
         ctx.moveTo(c * TILE, 0);
         ctx.lineTo(c * TILE, canvas.height);
@@ -71,96 +399,152 @@ function drawGridLines() {
     }
 }
 
-function draw() {
-    clear();
-
-    // ctx.fillStyle = "black";
-    // ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    drawMaze();
-    drawGridLines();
-    drawPlayer();
-}
-
-
-const mazeL1 =[
-
-    [2,0,1,0,0,0,1,0,1,0],
-    [0,1,1,0,1,0,1,0,1,0],
-    [0,0,0,0,1,0,0,0,0,0],
-    [1,1,1,0,1,1,1,1,1,0],
-    [0,0,0,0,0,0,0,1,0,0],
-    [0,1,1,1,1,1,0,1,1,0],
-    [0,0,0,0,0,1,0,0,0,0],
-    [1,1,1,1,0,1,1,1,1,0],
-    [0,0,0,1,0,0,0,0,1,0],
-    [0,1,0,0,0,1,1,0,0,3], 
-]
-
-
-function findCell(level, code) {
-    for (let r = 0; r < ROWS; r++) {
-        for (let c = 0; c < COLS; c++) {
-            if (level[r][c] === code) { return { r, c }; }
-        }
-    }
-    return { r: 0, c: 0 };
-}
-
-const startPos = findCell(mazeL1, 2);
-const finishPos = findCell(mazeL1, 3);
-let playerPos = {c: startPos.c, r: startPos.r};
-
 function drawMaze() {
+    const finishPos = findCell(currentMaze, 3);
+
     for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS; c++) {
             const x = c * TILE;
             const y = r * TILE;
-            const cell = mazeL1[r][c];
+            const cell = currentMaze[r][c];
 
-        if (cell === 1) {
-            ctx.fillStyle = "red"; // wall (asteroid later)
-        } else if (cell === 3) {
-            ctx.fillStyle = "green"; // finish bg
-        } else {
-            ctx.fillStyle = "#000";    // path
-        }
-        ctx.fillRect(x, y, TILE, TILE);
+            // Draw path texture as background for all cells first
+            if (textures.path.complete && textures.path.naturalWidth > 0) {
+                ctx.drawImage(textures.path, x, y, TILE, TILE);
+            } else {
+                ctx.fillStyle = "#0a0a2e";
+                ctx.fillRect(x, y, TILE, TILE);
+            }
+
+            if (cell === 1) {
+                // Wall - draw asteroid texture
+                if (textures.wall.complete && textures.wall.naturalWidth > 0) {
+                    ctx.drawImage(textures.wall, x, y, TILE, TILE);
+                } else {
+                    ctx.fillStyle = "red";
+                    ctx.fillRect(x, y, TILE, TILE);
+                }
+            } else if (cell === 2) {
+                // Start position - draw start texture
+                if (textures.start.complete && textures.start.naturalWidth > 0) {
+                    ctx.drawImage(textures.start, x, y, TILE, TILE);
+                } else {
+                    ctx.fillStyle = "#00ff88";
+                    ctx.fillRect(x, y, TILE, TILE);
+                }
+            } else if (cell === 3) {
+                // Finish position - draw finish texture
+                if (textures.finish.complete && textures.finish.naturalWidth > 0) {
+                    ctx.drawImage(textures.finish, x, y, TILE, TILE);
+                } else {
+                    ctx.fillStyle = "green";
+                    ctx.fillRect(x, y, TILE, TILE);
+                }
+            }
         }
     }
 }
 
+function drawObstacles() {
+    activeObstacles.forEach(obstacle => obstacle.draw());
+}
 
-document.addEventListener("keydown", onKey)
+function drawTimer() {
+    // Draw semi-transparent background for UI
+    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.fillRect(0, 0, canvas.width, 40);
+
+    if (gameWon) {
+        const finalTime = Math.floor((gameWon - startTime) / 1000);
+        ctx.fillStyle = "#0f0";
+        ctx.font = "bold 20px Orbitron, sans-serif";
+        ctx.fillText(`🏁 Time: ${finalTime}s`, 10, 28);
+    } else {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        ctx.fillStyle = "#fff";
+        ctx.font = "18px Orbitron, sans-serif";
+        ctx.fillText(`⏱ Time: ${elapsed}s`, 10, 28);
+    }
+
+    // Draw level indicator
+    ctx.fillStyle = "#0ff";
+    ctx.font = "18px Orbitron, sans-serif";
+    ctx.fillText(`Level ${currentLevel + 1}/5`, canvas.width - 110, 28);
+}
+
+function draw() {
+    clear();
+    drawMaze();
+    drawGridLines();
+    drawObstacles();
+    drawPlayer();
+    drawTimer();
+}
+
+// ============ INPUT HANDLING ============
+document.addEventListener("keydown", onKey);
 
 function onKey(e) {
-    const dir = { ArrowUp: [0, -1] , ArrowDown: [0, 1] , ArrowLeft: [-1, 0] , ArrowRight: [1, 0] }[e.key];
+    if (gameWon) return;
+
+    const dir = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key];
     if (!dir) return;
 
-    const [dc, dr] = dir;  //delta columns, delta rows
-    const nc = clamp(player.c +dc, 0, COLS -1); //new column
-    const nr = clamp(player.r + dr, 0, ROWS -1); //new row
+    const [dc, dr] = dir;
+    const nc = clamp(player.c + dc, 0, COLS - 1);
+    const nr = clamp(player.r + dr, 0, ROWS - 1);
 
-    if(mazeL1[nr][nc] !== 1){
+    if (currentMaze[nr][nc] !== 1) {
         player.c = nc;
         player.r = nr;
+        audio.playStep();
+
+        // Check obstacle collision after player moves
+        for (const obstacle of activeObstacles) {
+            if (obstacle.checkCollision(player.r, player.c)) {
+                resetPlayer();
+                draw();
+                return;
+            }
+        }
+
         checkFinish();
         draw();
+    } else {
+        audio.playHitWall();
     }
 }
 
-function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }//keeps the number in a valid range
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-function checkFinish(){
+function checkFinish() {
+    const finishPos = findCell(currentMaze, 3);
+
     if (player.c === finishPos.c && player.r === finishPos.r) {
-        setTimeout(()=> alert("🏁 You reached the planet!"), 10);
+        if (currentLevel < levels.length - 1) {
+            // More levels to go
+            audio.playLevelComplete();
+            const levelTime = Math.floor((Date.now() - startTime) / 1000);
+            setTimeout(() => {
+                alert(`🎉 Level ${currentLevel + 1} complete in ${levelTime}s! Get ready for ${levels[currentLevel + 1].name}!`);
+                initLevel(currentLevel + 1);
+            }, 300);
+        } else {
+            // Game complete!
+            gameWon = Date.now();
+            audio.playWin();
+            const finalTime = Math.floor((gameWon - startTime) / 1000);
+            setTimeout(() => {
+                alert(`� CONGRATULATIONS! You escaped through all 5 stages!\nFinal stage time: ${finalTime}s`);
+            }, 500);
+        }
     }
 }
 
+// ============ INITIALIZATION ============
+initLevel(0);
 
-draw();
-
-//todo de adaugat texturi
-//todo de adaugat timer
-//todo de adaugat alte nivele
-//todo de adaugat obstacole
+// Update timer display every second
+setInterval(() => {
+    if (!gameWon) draw();
+}, 1000);
