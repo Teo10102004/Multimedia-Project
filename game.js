@@ -6,16 +6,20 @@ const textures = {
     wall: new Image(),
     path: new Image(),
     start: new Image(),
-    finish: new Image()
+    finish: new Image(),
+    player: new Image(),
+    alien: new Image()
 };
 
 textures.wall.src = 'Images/blueAsteroidwithStars.png';
 textures.path.src = 'Images/blueStarFilling3.jpg';
 textures.start.src = 'Images/Start1.png';
 textures.finish.src = 'Images/Finish.png';
+textures.player.src = 'Images/spaceship.png';
+textures.alien.src = 'Images/alien.png';
 
 let texturesLoaded = 0;
-const totalTextures = 4;
+const totalTextures = 6;
 
 function onTextureLoad() {
     texturesLoaded++;
@@ -24,15 +28,22 @@ function onTextureLoad() {
     }
 }
 
-textures.wall.onload = onTextureLoad;
+textures.wall.onload = onTextureLoad; //onTextureLoad means when the texture is loaded, call this function
 textures.path.onload = onTextureLoad;
 textures.start.onload = onTextureLoad;
 textures.finish.onload = onTextureLoad;
+textures.player.onload = onTextureLoad;
+
 
 // ============ AUDIO SYSTEM ============
-class AudioManager {
+class AudioManager { 
     constructor() {
         this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Setup background music
+        this.bgMusic = new Audio('Audio/space-ambient.mp3'); // Change to your file path
+        this.bgMusic.loop = true;
+        this.bgMusic.volume = 0.2; // Set to 20% volume so it doesn't drown out SFX
     }
 
     // Ensure AudioContext is running (issue found: may be suspended after alerts/popups)
@@ -92,7 +103,18 @@ class AudioManager {
         setTimeout(() => this.playTone(659, 0.1, 'sine', 0.25), 100);
         setTimeout(() => this.playTone(784, 0.15, 'sine', 0.25), 200);
     }
-}
+
+
+    startMusic() {
+        this.ensureResumed();
+        // Check if music is already playing to avoid overlapping
+        if (this.bgMusic.paused) {
+            this.bgMusic.play().catch(e => console.log("Music wait for interaction"));
+        }
+    }
+ }
+
+    
 
 const audio = new AudioManager();
 
@@ -255,47 +277,59 @@ class Obstacle {
             // Reverse direction
             this.forward = !this.forward;
         }
+
     }
-
-    draw() {
-        const x = this.c * TILE;
-        const y = this.r * TILE;
-
-        // Draw obstacle as a red warning symbol
-        ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-        ctx.fillRect(x, y, TILE, TILE);
-
-        // Draw X pattern
-        ctx.strokeStyle = '#ff3333';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(x + 10, y + 10);
-        ctx.lineTo(x + TILE - 10, y + TILE - 10);
-        ctx.moveTo(x + TILE - 10, y + 10);
-        ctx.lineTo(x + 10, y + TILE - 10);
-        ctx.stroke();
-
-        // Draw pulsing circle
-        const pulse = Math.sin(Date.now() / 200) * 5 + 15;
-        ctx.beginPath();
-        ctx.arc(x + TILE / 2, y + TILE / 2, pulse, 0, Math.PI * 2);
-        ctx.strokeStyle = '#ff6666';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-    }
-
     checkCollision(playerR, playerC) {
-        return this.r === playerR && this.c === playerC;
+        return this.r === playerR && this.c === playerC;  
+    }
+
+   draw() {
+    const x = this.c * TILE;
+    const y = this.r * TILE;
+
+    // 1. Create an animation offset using time
+    // This makes the alien "hover" or pulse
+    const bobbing = Math.sin(Date.now() / 200) * 5; 
+    const pulse = Math.sin(Date.now() / 150) * 0.1;
+
+    if (textures.alien.complete && textures.alien.naturalWidth > 0) {
+        ctx.save();
+        
+        // Add a red "danger" glow behind the alien
+        ctx.shadowColor = 'red';
+        ctx.shadowBlur = 15;
+
+        // Draw the alien image centered in the tile with bobbing effect
+        // We add (1 + pulse) to the size to make it breathe
+        const size = TILE * (0.8 + pulse);
+        const offset = (TILE - size) / 2;
+
+        ctx.drawImage(
+            textures.alien, 
+            x + offset, 
+            y + offset + bobbing, 
+            size, 
+            size
+        );
+        
+        ctx.restore();
+    } else {
+        // Fallback: If image fails, draw a red circle so the game is still playable
+        ctx.fillStyle = "red";
+        ctx.beginPath();
+        ctx.arc(x + TILE/2, y + TILE/2 + bobbing, 15, 0, Math.PI * 2);
+        ctx.fill();
     }
 }
+}
+
 
 // ============ GAME STATE ============
 let currentLevel = 0;
 let currentMaze = levels[currentLevel].maze;
 let activeObstacles = [];
 let obstacleIntervals = [];
-
-let player = { c: 0, r: 0, size: TILE * 0.6 };
+let player = { c: 0, r: 0, size: TILE * 0.8, angle: 0 };
 
 function findCell(maze, code) {
     for (let r = 0; r < ROWS; r++) {
@@ -307,42 +341,48 @@ function findCell(maze, code) {
 }
 
 function initLevel(levelIndex) {
-    // Clear existing obstacle intervals
+    // Safety check: if the level doesn't exist, don't try to load it
+    if (!levels[levelIndex]) {
+        console.error("Level " + levelIndex + " does not exist!");
+        return;
+    }
+
+    // Clear old intervals
     obstacleIntervals.forEach(interval => clearInterval(interval));
     obstacleIntervals = [];
 
     currentLevel = levelIndex;
     currentMaze = levels[currentLevel].maze;
 
-    // Find start and finish positions
+    // Reset player position
     const startPos = findCell(currentMaze, 2);
-    const finishPos = findCell(currentMaze, 3);
-
     player.c = startPos.c;
     player.r = startPos.r;
 
     gameWon = false;
     startTime = Date.now();
 
-    // Create obstacles for this level
+    // Re-create obstacles
     activeObstacles = levels[currentLevel].obstacles.map(obs =>
         new Obstacle(obs.r, obs.c, obs.direction, obs.range, obs.speed)
     );
 
-    // Start obstacle movement intervals
-    activeObstacles.forEach((obstacle, index) => {
-        const interval = setInterval(() => {
-            obstacle.move(currentMaze);
-            if (obstacle.checkCollision(player.r, player.c)) {
-                resetPlayer();
-            }
-            draw();
-        }, obstacle.speed);
-        obstacleIntervals.push(interval);
-    });
+    activeObstacles.forEach((obstacle) => {
+    const interval = setInterval(() => {
+        obstacle.move(currentMaze);
+        // Check if the alien moved INTO the player
+        if (obstacle.checkCollision(player.r, player.c)) {
+            resetPlayer();
+        }
+    }, obstacle.speed);
+    obstacleIntervals.push(interval);
+});
 
-    // Update page title
-    document.querySelector('h1').textContent = levels[currentLevel].name;
+    // SAFE HTML UPDATE
+    const title = document.querySelector('h1');
+    if (title) {
+        title.textContent = levels[currentLevel].name;
+    }
 
     draw();
 }
@@ -360,26 +400,34 @@ function clear() {
 }
 
 function drawPlayer() {
-    const px = player.c * TILE + (TILE - player.size) / 2;
-    const py = player.r * TILE + (TILE - player.size) / 2;
+    const centerX = player.c * TILE + TILE / 2; // Center of player is tile center
+    const centerY = player.r * TILE + TILE / 2;
 
-    // Draw player as a spaceship shape
-    ctx.fillStyle = "cyan";
-    ctx.beginPath();
-    ctx.moveTo(px + player.size / 2, py); // Top point
-    ctx.lineTo(px + player.size, py + player.size); // Bottom right
-    ctx.lineTo(px + player.size / 2, py + player.size * 0.7); // Bottom middle
-    ctx.lineTo(px, py + player.size); // Bottom left
-    ctx.closePath();
-    ctx.fill();
+    ctx.save(); // Save current state
+    ctx.translate(centerX, centerY); // Move origin to player center
+    ctx.rotate(player.angle); // Rotate the canvas, not the player
 
-    // Add glow effect
+    // Add glow effect 
     ctx.shadowColor = 'cyan';
-    ctx.shadowBlur = 10;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-}
+    ctx.shadowBlur = 15;
 
+    if (textures.player.complete && textures.player.naturalWidth > 0) { 
+        // Draw the image centered at the new (0,0)
+        ctx.drawImage(
+            textures.player, 
+            -player.size / 2, 
+            -player.size / 2, 
+            player.size, 
+            player.size
+        );
+    } else {
+        // Fallback if image fails to load
+        ctx.fillStyle = "cyan";
+        ctx.fillRect(-player.size/2, -player.size/2, player.size, player.size); 
+    }
+
+    ctx.restore(); // Restore state (prevents other things from being rotated, like the timer, maze, etc.)
+}
 function drawGridLines() {
     ctx.strokeStyle = "rgba(100, 100, 100, 0.3)";
     ctx.lineWidth = 1;
@@ -487,10 +535,21 @@ document.addEventListener("keydown", onKey);
 function onKey(e) {
     if (gameWon) return;
 
-    const dir = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key];
-    if (!dir) return;
+    audio.startMusic(); // Start background music on first interaction
 
-    const [dc, dr] = dir;
+    const directions = { 
+        ArrowUp:    { move: [0, -1], angle: 0 },             // Pointing Up
+        ArrowDown:  { move: [0, 1],  angle: Math.PI },       // Pointing Down (180°)
+        ArrowLeft:  { move: [-1, 0], angle: -Math.PI / 2 },  // Pointing Left (-90°)
+        ArrowRight: { move: [1, 0],  angle: Math.PI / 2 }    // Pointing Right (90°)
+    };
+
+    const action = directions[e.key];
+    if (!action) return;
+
+    player.angle = action.angle;
+    const[dc, dr] = action.move;
+
     const nc = clamp(player.c + dc, 0, COLS - 1);
     const nr = clamp(player.r + dr, 0, ROWS - 1);
 
@@ -521,25 +580,28 @@ function checkFinish() {
     const finishPos = findCell(currentMaze, 3);
 
     if (player.c === finishPos.c && player.r === finishPos.r) {
+        // Stop current level intervals
+        obstacleIntervals.forEach(interval => clearInterval(interval));
+        obstacleIntervals = [];
+
+        audio.playLevelComplete();
+
         if (currentLevel < levels.length - 1) {
-            // More levels to go
-            audio.playLevelComplete();
-            const levelTime = Math.floor((Date.now() - startTime) / 1000);
+            // Use a slight delay so the player sees they touched the finish icon
             setTimeout(() => {
-                alert(`🎉 Level ${currentLevel + 1} complete in ${levelTime}s! Get ready for ${levels[currentLevel + 1].name}!`);
-                initLevel(currentLevel + 1);
-            }, 300);
+                alert(`🎉 Stage ${currentLevel + 1} Complete!`);
+                initLevel(currentLevel + 1); // Pass the NEXT number directly
+            }, 50);
         } else {
-            // Game complete!
             gameWon = Date.now();
             audio.playWin();
-            const finalTime = Math.floor((gameWon - startTime) / 1000);
             setTimeout(() => {
-                alert(`� CONGRATULATIONS! You escaped through all 5 stages!\nFinal stage time: ${finalTime}s`);
-            }, 500);
+                alert("🚀 MISSION COMPLETE! You found a new home!");
+            }, 150);
         }
     }
 }
+
 
 // ============ INITIALIZATION ============
 initLevel(0);
@@ -547,4 +609,21 @@ initLevel(0);
 // Update timer display every second
 setInterval(() => {
     if (!gameWon) draw();
-}, 1000);
+}, 16);
+
+// Locate the button in the HTML
+const muteBtn = document.getElementById('muteBtn');
+muteBtn.style.font = "16px Orbitron, sans-serif";
+
+muteBtn.addEventListener('click', () => {
+    // We check the "muted" property of the bgMusic object inside your audio manager
+    if (audio.bgMusic.muted) {
+        audio.bgMusic.muted = false;
+        muteBtn.textContent = "🔈 Mute Music";
+        // In case the music hasn't started yet, this helps "wake it up"
+        audio.startMusic(); 
+    } else {
+        audio.bgMusic.muted = true;
+        muteBtn.textContent = "🔇 Unmute Music";
+    }
+});
